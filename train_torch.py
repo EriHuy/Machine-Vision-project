@@ -4,8 +4,6 @@ from tqdm import tqdm
 from io import BytesIO
 from zipfile import ZipFile
 from urllib.request import urlopen
-import matplotlib.pyplot as plt
-import time
 
 import torch
 import torch.optim as optim
@@ -83,14 +81,59 @@ data_provider = DataProvider(
     batch_size=configs.batch_size,
     data_preprocessors=[ImageReader()],
     transformers=[
-        ImageShowCV2(), # uncomment to show images during training
+        #ImageShowCV2(), # uncomment to show images during training
         ImageResizer(configs.width, configs.height, keep_aspect_ratio=False),
         LabelIndexer(configs.vocab),
         LabelPadding(max_word_length=configs.max_text_length, padding_value=len(configs.vocab))
         ],
     use_cache=True,
+    workers=1,
 )
-for _ in data_provider:
-    pass
 
+# Split the dataset into training and validation sets
+train_dataProvider, test_dataProvider = data_provider.split(split = 0.9)
 
+# Augment training data with random brightness, rotation and erode/dilate
+train_dataProvider.augmentors = [
+    RandomBrightness(),
+    RandomErodeDilate(),
+    RandomSharpen(),
+    RandomRotate(angle=10),
+    ]
+
+network = Network(len(configs.vocab), activation='leaky_relu', dropout=0.3)
+
+loss = CTCLoss(blank=len(configs.vocab))
+optimizer = optim.Adam(network.parameters(), lr=configs.learning_rate)
+
+# uncomment to print network summary, torchsummaryX package is required
+summary(network, torch.zeros((1, configs.height, configs.width, 3)))
+
+# put on cuda device if available
+if torch.cuda.is_available():
+    network = network.cuda()
+
+# create callbacks
+earlyStopping = EarlyStopping(monitor='val_CER', patience=20, mode="min", verbose=1)
+modelCheckpoint = ModelCheckpoint(configs.model_path + '/model.pt', monitor='val_CER', mode="min", save_best_only=True, verbose=1)
+tb_callback = TensorBoard(configs.model_path + '/logs')
+reduce_lr = ReduceLROnPlateau(monitor='val_CER', factor=0.9, patience=10, verbose=1, mode='min', min_lr=1e-6)
+model2onnx = Model2onnx(
+    saved_model_path=configs.model_path + '/model.pt',
+    input_shape=(1, configs.height, configs.width, 3),
+    verbose=1,
+    metadata={"vocab": configs.vocab}
+    )
+
+# create model object that will handle training and testing of the network
+model = Model(network, optimizer, loss, metrics=[CERMetric(configs.vocab), WERMetric(configs.vocab)])
+model.fit(
+    train_dataProvider,
+    test_dataProvider,
+    epochs=1000,
+    callbacks=[earlyStopping, modelCheckpoint, tb_callback, reduce_lr, model2onnx]
+    )
+
+# Save training and validation datasets as csv files
+train_dataProvider.to_csv(os.path.join(configs.model_path, 'train.csv'))
+test_dataProvider.to_csv(os.path.join(configs.model_path, 'val.csv'))
