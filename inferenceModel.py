@@ -1,13 +1,18 @@
 import cv2
 import typing
 import numpy as np
+import json
 
 from mltu.inferenceModel import OnnxInferenceModel
 from mltu.utils.text_utils import ctc_decoder, get_cer
 
+
 class ImageToWordModel(OnnxInferenceModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        with open('vocab.json', 'r') as vocab_file:
+            self.vocab = json.load(vocab_file)
 
     def predict(self, image: np.ndarray):
         image = cv2.resize(image, self.input_shape[:2][::-1])
@@ -20,22 +25,30 @@ class ImageToWordModel(OnnxInferenceModel):
 
         return text
 
+
 if __name__ == "__main__":
+
     import pandas as pd
+
     from tqdm import tqdm
 
-    model = ImageToWordModel(model_path="Models/08_handwriting_recognition_torch/202303142139/model.onnx")
+    model = ImageToWordModel(model_path="Models/08_handwriting_recognition_torch/202310112359/model.onnx")
 
-    df = pd.read_csv("Models/08_handwriting_recognition_torch/202303142139/val.csv").values.tolist()
+    df = pd.read_csv("Models/08_handwriting_recognition_torch/202310112359/val.csv").values.tolist()
 
     accum_cer = []
     for image_path, label in tqdm(df):
         image = cv2.imread(image_path)
 
-        prediction_text = model.predict(image)
 
-        cer = get_cer(prediction_text, label)
-        print(f"Image: {image_path}, Label: {label}, Prediction: {prediction_text}, CER: {cer}")
+
+        prediction_text = str(model.predict(image))
+        print(f"Image: {image_path}, Label: {label}, Prediction: {prediction_text}")
+
+        cer = get_cer(prediction_text, str(label))
+        print(f"CER: {cer}")
+
+
 
         accum_cer.append(cer)
 
